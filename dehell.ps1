@@ -26,7 +26,7 @@ function Get-DevEnvExecutableFilePath
 
 function Refresh-And-Run {
     param (
-        [Parameter(Mandatory=$false)] $path,
+        [Parameter(Mandatory=$false)] [String]$path,
         [Parameter(Mandatory=$false)] [bool]$runDebug = $false
     )
 
@@ -89,52 +89,66 @@ function Refresh-And-Run {
     if($runDebug) {
         $repos | ForEach-Object {
             $repo = $_
-            $repoPath = Join-Path $dir $repo | Resolve-Path;
-            $files = Get-ChildItem -Path $repoPath -File;
+            $repoPath = Join-Path $dir $repo | Resolve-Path
+            $files = Get-ChildItem -Path $repoPath -File #-Include "*.sln", "*.csproj", "*package.json" , "*denon.json"
 
-            $dotnetSolutions = $files | where { $_ -like '*.sln'}
-            if(($dotnetSolutions).count -gt 0) {
-                $devEnv = Get-DevEnvExecutableFilePath
-                if($devEnv) {
+            $processArgs = @()
+            $process
+            $found = $false
+            $notSupported = $false;
+
+            $files | where { ($_ -like '*.sln')} | Select-Object -First 1 | ForEach-Object {
+                $found = $true;
+                $process = Get-DevEnvExecutableFilePath
+                if($process) {
                     # https://docs.microsoft.com/en-us/visualstudio/ide/reference/devenv-command-line-switches?view=vs-2019
-                    write-Host "[$repo] devenv /R" -ForegroundColor DarkBlue
+                    $processArgs += "'/R'"
                 }
                 else {
-                    write-Host "[$repo] Missing devenv" -ForegroundColor DarkRed
+                    $notSupported = $true;
                 }
             }
 
-            $dotnetProjects = $files | where { $_ -like '*.csproj'}
-            if(($dotnetProjects).count -gt 0) {
-                $devEnv = Get-DevEnvExecutableFilePath
-                if($devEnv) {
-                    # https://docs.microsoft.com/en-us/visualstudio/ide/reference/devenv-command-line-switches?view=vs-2019
-                    write-Host "[$repo] devenv /R" -ForegroundColor DarkBlue
-                    Start-Process -FilePath $devEnv /R -WorkingDirectory $repoPath -NoNewWindow false &
+            if(!$found) {
+                $files | where { $_ -like '*.csproj'} | Select-Object -First 1 | ForEach-Object {
+                    $found = $true;
+                    $process = Get-DevEnvExecutableFilePath
+                    if($process) {
+                        # https://docs.microsoft.com/en-us/visualstudio/ide/reference/devenv-command-line-switches?view=vs-2019
+                        $processArgs += "'/R'"
+                    } else {
+                        $notSupported = $true;
+                    }
                 }
-                else {
-                    write-Host "[$repo] Missing devenv" -ForegroundColor DarkRed
-                }
-                return;
             }
-
-            $nodeProjects = $files | where { $_ -like '*package.json'}
-            if(($nodeProjects).count -gt 0) {
-                #TODO (MIKAEL) Parse package.json and look for start, dev or debug (and/or what garbage like Angular uses...)
-                write-Host "[$repo] npm start" -ForegroundColor DarkBlue
-                Start-Process -FilePath npm start -WorkingDirectory $repoPath -NoNewWindow false &
-                return;
-            }
-
-            $denoProjects = $files | where { $_ -like '*denon.json'}
-            if(($denoProjects).count -gt 0) {
-                #TODO (MIKAEL) Parse denon file and search for start, dev, debug
-                write-Host "[$repo] denon start" -ForegroundColor DarkBlue
-                Start-Process -FilePath denon start -WorkingDirectory $repoPath -NoNewWindow false &
-                return;
-            }
-
             
+            if(!$found) {
+                $files | where { $_ -like '*package.json'} | Select-Object -First 1 | ForEach-Object {
+                    #TODO (MIKAEL) Parse package.json and look for start, dev or debug (and/or what garbage like Angular uses...)
+                    $found = $true;
+                    $packageJson = $_ | Get-Content | ConvertFrom-Json;
+                    $process = "npm"
+                    $processArgs += "'start'"
+                }
+            }
+
+            if(!$found) {
+                $files | where { $_ -like '*denon.json'}  | Select-Object -First 1 | ForEach-Object {     
+                    $found = $true;    
+                    $denon = $_ | Get-Content | ConvertFrom-Json;
+                    $process = "denon"
+                    $processArgs += "'start'"
+                }
+            }
+
+            if($found) {
+                if(!$notSupported) {
+                    write-Host "[$repo] Debugging" -ForegroundColor DarkBlue
+                    Start-Process -FilePath $process -ArgumentList $processArgs -WorkingDirectory $repoPath
+                } else {
+                    write-Host "[$repo] Runtime is not supported on this machine" -ForegroundColor DarkRed
+                }
+            }
         }
     }
 } 
